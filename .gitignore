@@ -1,0 +1,20 @@
+# Flutter y Android
+**/.dart_tool/
+**/build/
+**/.gradle/
+**/.kotlin/
+**/.idea/
+**/local.properties
+**/.flutter-plugins-dependencies
+
+# Firma privada: nunca publicar
+**/key.properties
+**/*.jks
+**/*.keystore
+
+# Archivos generados y locales
+*.apk
+*.aab
+*.log
+*.iml
+.DS_Store
