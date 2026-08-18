@@ -214,7 +214,7 @@ function listUsers_(b) {
   return objects_(sheet_('USUARIOS')).map(u => ({
     id: u.ID_USUARIO, username: u.USUARIO, name: u.NOMBRE_COMPLETO,
     area: u['ÁREA'], location: u['UBICACIÓN_BASE'], shift: u.TURNO,
-    role: u.ROL, active: u.ACTIVO === 'Sí', superadmin: u.USUARIO === SUPERADMIN_USER
+    role: u.ROL, active: u.ACTIVO === 'Sí', superadmin: normalizeUser_(u.USUARIO) === normalizeUser_(SUPERADMIN_USER)
   }));
 }
 
@@ -287,7 +287,11 @@ function addCatalog_(b) {
 }
 
 function requireSuperAdmin_(user) {
-  if (!user || user.USUARIO !== SUPERADMIN_USER) throw new Error('Acceso exclusivo del Superadministrador');
+  if (!user || normalizeUser_(user.USUARIO) !== normalizeUser_(SUPERADMIN_USER)) throw new Error('Acceso exclusivo del Superadministrador');
+}
+
+function normalizeUser_(value) {
+  return String(value || '').trim().toLowerCase();
 }
 
 function dashboard_(b) {
