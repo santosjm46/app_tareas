@@ -59,7 +59,7 @@ class HomePage extends StatefulWidget { final String token; final Map<String,dyn
 class _HomePageState extends State<HomePage>{int index=0; List jobs=[]; Map stats={}; bool busy=true;String period='Hoy';List<String> patios=List.of(patioLocations),buses=List.of(busCodes);
   bool get privileged=>widget.profile['role']!='Técnico';
   bool get globalAdmin=>['Administrador','Jefe'].contains(widget.profile['role']);
-  bool get superAdmin=>widget.profile['username']?.toString().toLowerCase()=='uma069';
+  bool get superAdmin=>widget.profile['username']?.toString().toLowerCase()=='santos.jahuira';
   String get today=>DateTime.now().toIso8601String().substring(0,10);
   List get todayJobs=>jobs.where((j)=>j['FECHA_ISO']==today).toList();
   List get displayedJobs=>period=='Hoy'?todayJobs:jobs;
