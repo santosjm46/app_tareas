@@ -1,6 +1,7 @@
 const BOOK_ID = '1c9AxyjnvhGGNaK7O-QgGie-hnPTU3ph87mbr00KRvf0';
 const INITIAL_PASSWORD = '123456';
 const SUPERADMIN_USER = 'santos.jahuira';
+const SUPERADMIN_ALIASES = ['santos.jahuira', 'santos'];
 const INITIAL_PATIOS = ['CAJA FERROVIARIA','CENTRO','CHASQUIPAMPA','HUAYLLANI','INCALLOJETA','INTEGRADORA','IRPAVI','LA PORTADA','SUB ALCALDÍA M.','VILLA SALOMÉ'];
 const INITIAL_BA = ['002','003','004','005','006','007','008','009','010','011','012','013','014','015','018','019','021','022','023','024','026','028','029','030','031','033','034','035','037','038','039','040','041','044','045','046','047','049','050','051','052','053','054','055','056','057','058','060','061','062','063','064','065','066','068','071','073','074','075','076','077','078','080','081','082','084','087','088','089','090','091','092','093','094','095','096','097','099','100','103','104','108','109','110','111','112','114','116','117','118','120','121','122','123','124','127','128','132','133','134','135','136','137','138','139','142','145','173'];
 const INITIAL_BS = ['001','002','003','004','005','006','007','008','009','010','011','012','013','014','015','016','017','018','019','020','021','022','023','024','025','026','027','028','029','030','031','032','033','034','035','036','037','038','039'];
@@ -10,7 +11,7 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.payload) {
     return handleRequest_(JSON.parse(e.parameter.payload));
   }
-  return json_({ ok: true, service: 'UMA Trabajos', version: 2 });
+  return json_({ ok: true, service: 'SSUMA Trabajos', version: 3 });
 }
 
 function doPost(e) {
@@ -214,7 +215,7 @@ function listUsers_(b) {
   return objects_(sheet_('USUARIOS')).map(u => ({
     id: u.ID_USUARIO, username: u.USUARIO, name: u.NOMBRE_COMPLETO,
     area: u['ÁREA'], location: u['UBICACIÓN_BASE'], shift: u.TURNO,
-    role: u.ROL, active: u.ACTIVO === 'Sí', superadmin: normalizeUser_(u.USUARIO) === normalizeUser_(SUPERADMIN_USER)
+    role: u.ROL, active: u.ACTIVO === 'Sí', superadmin: isSuperAdmin_(u)
   }));
 }
 
@@ -287,11 +288,17 @@ function addCatalog_(b) {
 }
 
 function requireSuperAdmin_(user) {
-  if (!user || normalizeUser_(user.USUARIO) !== normalizeUser_(SUPERADMIN_USER)) throw new Error('Acceso exclusivo del Superadministrador');
+  if (!isSuperAdmin_(user)) throw new Error('Acceso exclusivo del Superadministrador Santos Jahuira');
 }
 
 function normalizeUser_(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function isSuperAdmin_(user) {
+  if (!user) return false;
+  const username = normalizeUser_(user.USUARIO || user.username);
+  return SUPERADMIN_ALIASES.includes(username);
 }
 
 function dashboard_(b) {
