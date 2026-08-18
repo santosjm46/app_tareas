@@ -9,7 +9,8 @@ void main() {
     await tester.pumpWidget(const UmaApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('Registro diario\nde trabajos'), findsOneWidget);
-    expect(find.text('INGRESAR'), findsOneWidget);
+    expect(find.text('Registro diario de trabajos'), findsOneWidget);
+    expect(find.text('SSUMA'), findsOneWidget);
+    expect(find.text('INGRESAR AL SISTEMA'), findsOneWidget);
   });
 }

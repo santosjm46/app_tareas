@@ -1,6 +1,6 @@
-# UMA SETRAM — Registro diario de trabajos
+# SSUMA — Registro diario de trabajos
 
-Aplicación institucional Android para registrar y supervisar los trabajos diarios del personal TIC, Mecánica, Electromecánica, Restauración y Maestranza.
+Módulo móvil del Sistema de Seguimiento SSUMA para registrar y supervisar los trabajos diarios del personal TIC, Mecánica, Electromecánica, Restauración y Maestranza de UMA / DOM / SETRAM.
 
 ## Componentes
 
