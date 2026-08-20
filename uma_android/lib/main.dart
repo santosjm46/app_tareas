@@ -1297,7 +1297,12 @@ class _JobFormState extends State<JobForm> {
   ].where((x) => int.parse(x) > previousProgress).toList();
 
   List<Map<String, dynamic>> get eligibleStaff {
-    final result = List<Map<String, dynamic>>.from(widget.staff);
+    final selectedPatio = patio.text.trim().toUpperCase();
+    final result = widget.staff
+        .where(
+          (x) => x['location'].toString().trim().toUpperCase() == selectedPatio,
+        )
+        .toList();
     result.sort((a, b) => a['name'].toString().compareTo(b['name'].toString()));
     return result;
   }
@@ -1466,7 +1471,7 @@ class _JobFormState extends State<JobForm> {
       return;
     }
     if (assignTo == currentAssignee) {
-      message('Selecciona otro responsable de la misma área');
+      message('Selecciona otro responsable de la misma área y patio');
       return;
     }
     final target = eligibleStaff.firstWhere(

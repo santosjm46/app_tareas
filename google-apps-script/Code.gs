@@ -22,7 +22,7 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.payload) {
     return handleRequest_(JSON.parse(e.parameter.payload));
   }
-  return json_({ ok: true, service: 'SSUMA Trabajos', version: 5 });
+  return json_({ ok: true, service: 'SSUMA Trabajos', version: 6 });
 }
 
 function doPost(e) {
@@ -131,9 +131,15 @@ function listJobs_(b) {
     });
   });
   rows.sort((a, c) => String(c.FECHA_ISO).localeCompare(String(a.FECHA_ISO)));
-  if (user.ROL === 'Técnico') return rows.filter(r => r.USUARIO === user.USUARIO || String(r.ASIGNADO_A || '') === user.USUARIO);
-  if (['Supervisor', 'Responsable'].includes(user.ROL)) return rows.filter(r => r['ÁREA'] === user['ÁREA']);
-  if (['Administrador', 'Jefe'].includes(user.ROL)) return rows;
+  if (user.ROL === 'Técnico') {
+    const userArea = normalizeArea_(user['ÁREA']);
+    const userPatio = normalizeArea_(user['UBICACIÓN_BASE']);
+    return rows.filter(r => {
+      const jobPatio = r.PATIO || (r.LUGAR === 'Patio' ? r['UBICACIÓN'] : '');
+      return normalizeArea_(r['ÁREA']) === userArea && normalizeArea_(jobPatio) === userPatio;
+    });
+  }
+  if (['Supervisor', 'Responsable', 'Administrador', 'Jefe'].includes(user.ROL)) return rows;
   return rows.filter(r => r.USUARIO === user.USUARIO);
 }
 
@@ -206,7 +212,7 @@ function saveJob_(b) {
     jobsSheet.getRange(row, 19).setValue(total);
     jobsSheet.getRange(row, 20).setValue(formatMinutes_(total));
     if (p.patio) jobsSheet.getRange(row, 21).setValue(p.patio);
-    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, existing['ÁREA']);
+    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, existing['ÁREA'], existing.PATIO || p.patio);
     setCellByHeader_(jobsSheet, row, columns.jobs, 'SISTEMA', p.system);
     setCellByHeader_(jobsSheet, row, columns.jobs, 'ASIGNADO_A', nextAssignee.USUARIO);
     setCellByHeader_(jobsSheet, row, columns.jobs, 'ASIGNADO_NOMBRE', nextAssignee.NOMBRE_COMPLETO);
@@ -219,7 +225,7 @@ function saveJob_(b) {
       sameText(r[jobHeaders[6]], p.asset) && sameText(r[jobHeaders[8]], p.order) &&
       sameText(r[jobHeaders[9]], p.description) && sameText(r[jobHeaders[10]], p.start) && sameText(r[jobHeaders[11]], p.end));
     if (duplicateJob) throw new Error('Ya existe un trabajo con los mismos datos, horario y usuario');
-    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, user['ÁREA']);
+    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, user['ÁREA'], p.patio);
     const newRow = [id, new Date(), user.USUARIO, user.NOMBRE_COMPLETO, user['ÁREA'], p.place, p.asset, p.hasOrder ? 'Sí' : 'No', p.order || '', p.description, p.start, p.end, Number(p.progress), Number(p.progress) === 100 ? 'Finalizado' : 'En progreso', p.materials || 'No', p.notes || '', '', new Date(), duration, formatMinutes_(duration), p.patio || ''];
     while (newRow.length < jobsSheet.getLastColumn()) newRow.push('');
     newRow[columns.jobs.SISTEMA - 1] = p.system;
@@ -259,7 +265,7 @@ function reassignJob_(b) {
     const currentAssignee = String(job.ASIGNADO_A || job.USUARIO || '');
     if (currentAssignee !== user.USUARIO && user.ROL === 'Técnico') throw new Error('Este trabajo está asignado a otro técnico');
     if (assignTo === currentAssignee) throw new Error('Selecciona otro responsable');
-    const target = validateAssignee_(assignTo, job['ÁREA']);
+    const target = validateAssignee_(assignTo, job['ÁREA'], job.PATIO || (job.LUGAR === 'Patio' ? job['UBICACIÓN'] : ''));
     const columns = ensureHeaders_(located.sheet, ['PATIO', 'SISTEMA', 'ASIGNADO_A', 'ASIGNADO_NOMBRE', 'ULTIMO_TECNICO', 'ULTIMA_ACTIVIDAD']);
     setCellByHeader_(located.sheet, job._row, columns, 'ASIGNADO_A', target.USUARIO);
     setCellByHeader_(located.sheet, job._row, columns, 'ASIGNADO_NOMBRE', target.NOMBRE_COMPLETO);
@@ -350,7 +356,8 @@ function getCatalogs_(b) {
   const area = normalizeArea_(user['ÁREA']);
   const unrestricted = ['Administrador', 'Jefe'].includes(user.ROL);
   const systems = allSystems.filter(x => x.active && (unrestricted || normalizeArea_(x.area) === 'TODOS' || normalizeArea_(x.area).split('/').map(v => v.trim()).includes(area))).map(x => x.name).sort();
-  const staff = objects_(sheet_('USUARIOS')).filter(x => x.ACTIVO === 'Sí' && x.ROL === 'Técnico' && (unrestricted || normalizeArea_(x['ÁREA']) === area)).map(x => ({
+  const userPatio = normalizeArea_(user['UBICACIÓN_BASE']);
+  const staff = objects_(sheet_('USUARIOS')).filter(x => x.ACTIVO === 'Sí' && x.ROL === 'Técnico' && normalizeArea_(x['ÁREA']) === area && (unrestricted || normalizeArea_(x['UBICACIÓN_BASE']) === userPatio)).map(x => ({
     username: String(x.USUARIO), name: String(x.NOMBRE_COMPLETO), area: String(x['ÁREA']), location: String(x['UBICACIÓN_BASE'] || ''), shift: String(x.TURNO || '')
   }));
   return { patios, buses, systems, systemCatalog: allSystems, staff };
@@ -470,10 +477,11 @@ function setCellByHeader_(sheet, row, headers, name, value) {
   sheet.getRange(row, headers[name]).setValue(value);
 }
 
-function validateAssignee_(username, area) {
+function validateAssignee_(username, area, patio) {
   const target = findUser_(username);
   if (!target || target.ACTIVO !== 'Sí' || target.ROL !== 'Técnico') throw new Error('El técnico asignado no está disponible');
   if (normalizeArea_(target['ÁREA']) !== normalizeArea_(area)) throw new Error('El técnico asignado debe pertenecer a la misma área');
+  if (normalizeArea_(target['UBICACIÓN_BASE']) !== normalizeArea_(patio)) throw new Error('El técnico asignado debe pertenecer al mismo patio');
   return target;
 }
 
