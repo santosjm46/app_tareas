@@ -2,6 +2,17 @@ const BOOK_ID = '1c9AxyjnvhGGNaK7O-QgGie-hnPTU3ph87mbr00KRvf0';
 const INITIAL_PASSWORD = '123456';
 const SUPERADMIN_USER = 'santos.jahuira';
 const SUPERADMIN_ALIASES = ['santos.jahuira', 'santos'];
+const INITIAL_SYSTEMS = [
+  ['ELECTRICO', 'ELECTROMECANICA'], ['ASCENSOR', 'ELECTROMECANICA'], ['RETARDER', 'ELECTROMECANICA'],
+  ['CALEFACCION', 'MECANICA'], ['MOTOR', 'MECANICA'], ['MTO PREVENTIVO', 'MECANICA'],
+  ['SUSPENSION', 'MECANICA'], ['ELECTRONEUMATICO', 'MECANICA'], ['TRACCION', 'MECANICA'],
+  ['DIFERENCIAL', 'MECANICA'], ['DIRECCION', 'MECANICA'], ['EJE DELANTERO', 'MECANICA'],
+  ['EJE TRASERO', 'MECANICA'], ['EMBRAGUE', 'MECANICA'], ['FRENOS', 'MECANICA'],
+  ['NEUMATICO', 'MECANICA'], ['TRANSMISION', 'MECANICA'],
+  ['CARROCERIA', 'RESTAURACION / MECANICA'], ['LEGAL', 'RESTAURACION / MECANICA'],
+  ['ACCESO', 'TIC'], ['SEGURIDAD', 'TIC'], ['GEOLOCALIZACION', 'TIC'], ['AUDIOVISUAL', 'TIC'],
+  ['COBRO', 'TIC'], ['COMUNICACION', 'TIC'], ['GPS', 'TIC'], ['INTERNET', 'TIC'], ['OTRO', 'TODOS']
+];
 const INITIAL_PATIOS = ['CAJA FERROVIARIA','CENTRO','CHASQUIPAMPA','HUAYLLANI','INCALLOJETA','INTEGRADORA','IRPAVI','LA PORTADA','SUB ALCALDÍA M.','VILLA SALOMÉ'];
 const INITIAL_BA = ['002','003','004','005','006','007','008','009','010','011','012','013','014','015','018','019','021','022','023','024','026','028','029','030','031','033','034','035','037','038','039','040','041','044','045','046','047','049','050','051','052','053','054','055','056','057','058','060','061','062','063','064','065','066','068','071','073','074','075','076','077','078','080','081','082','084','087','088','089','090','091','092','093','094','095','096','097','099','100','103','104','108','109','110','111','112','114','116','117','118','120','121','122','123','124','127','128','132','133','134','135','136','137','138','139','142','145','173'];
 const INITIAL_BS = ['001','002','003','004','005','006','007','008','009','010','011','012','013','014','015','016','017','018','019','020','021','022','023','024','025','026','027','028','029','030','031','032','033','034','035','036','037','038','039'];
@@ -11,7 +22,7 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.payload) {
     return handleRequest_(JSON.parse(e.parameter.payload));
   }
-  return json_({ ok: true, service: 'SSUMA Trabajos', version: 3 });
+  return json_({ ok: true, service: 'SSUMA Trabajos', version: 4 });
 }
 
 function doPost(e) {
@@ -32,6 +43,7 @@ function handleRequest_(body) {
       updateUser: () => updateUser_(body),
       getCatalogs: () => getCatalogs_(body),
       addCatalog: () => addCatalog_(body),
+      updateCatalog: () => updateCatalog_(body),
       dashboard: () => dashboard_(body),
       ensureMonth: () => ensureMonth_(new Date())
     };
@@ -95,15 +107,30 @@ function resetPassword_(b) {
 function listJobs_(b) {
   const user = auth_(b.token);
   const names = ensureMonth_(b.month ? new Date(b.month + '-01T12:00:00') : new Date());
-  const jobsSheet = sheet_(names.jobs);
-  const dateHeader = String(jobsSheet.getRange(1, 2).getValue());
   const tz = Session.getScriptTimeZone();
-  const rows = objects_(jobsSheet).map(r => {
-    const date = r[dateHeader] instanceof Date ? r[dateHeader] : new Date(r[dateHeader]);
-    r.FECHA_ISO = isNaN(date.getTime()) ? '' : Utilities.formatDate(date, tz, 'yyyy-MM-dd');
-    return r;
+  const book = SpreadsheetApp.openById(BOOK_ID);
+  const sourceSheets = b.month ? [sheet_(names.jobs)] : book.getSheets().filter(s => /^TRABAJOS_\d{4}_\d{2}$/.test(s.getName()));
+  const currentName = names.jobs;
+  const seen = {};
+  const rows = [];
+  sourceSheets.forEach(jobsSheet => {
+    ensureJobColumns_(jobsSheet, sheet_(jobsSheet.getName().replace('TRABAJOS_', 'AVANCES_')));
+    const dateHeader = String(jobsSheet.getRange(1, 2).getValue());
+    objects_(jobsSheet).forEach(r => {
+      const date = r[dateHeader] instanceof Date ? r[dateHeader] : new Date(r[dateHeader]);
+      r.FECHA_ISO = isNaN(date.getTime()) ? '' : Utilities.formatDate(date, tz, 'yyyy-MM-dd');
+      const age = isNaN(date.getTime()) ? 0 : Math.max(0, Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(date).setHours(0, 0, 0, 0)) / 86400000));
+      r.DIAS_ABIERTO = age;
+      r.ALERTA_ATRASO = r.ESTADO !== 'Finalizado' && Number(r.AVANCE_ACTUAL || 0) < 100 && age > 2;
+      const id = String(r.ID_TRABAJO || r[jobsSheet.getRange(1, 1).getValue()] || '');
+      if (!seen[id] && (jobsSheet.getName() === currentName || r.ESTADO !== 'Finalizado')) {
+        seen[id] = true;
+        rows.push(r);
+      }
+    });
   });
-  if (user.ROL === 'Técnico') return rows.filter(r => r.USUARIO === user.USUARIO);
+  rows.sort((a, c) => String(c.FECHA_ISO).localeCompare(String(a.FECHA_ISO)));
+  if (user.ROL === 'Técnico') return rows.filter(r => r.USUARIO === user.USUARIO || String(r.ASIGNADO_A || '') === user.USUARIO);
   if (['Supervisor', 'Responsable'].includes(user.ROL)) return rows.filter(r => r['ÁREA'] === user['ÁREA']);
   if (['Administrador', 'Jefe'].includes(user.ROL)) return rows;
   return rows.filter(r => r.USUARIO === user.USUARIO);
@@ -112,7 +139,8 @@ function listJobs_(b) {
 function saveJob_(b) {
   const user = auth_(b.token);
   const p = b.job || {};
-  if (!p.place || !p.patio || !p.description || !p.start || !p.end || p.progress === undefined) throw new Error('Faltan campos obligatorios');
+  if (!p.place || !p.patio || !p.system || !p.description || !p.start || !p.end || p.progress === undefined) throw new Error('Faltan campos obligatorios');
+  validateSystem_(p.system, user['ÁREA']);
   if (p.place === 'Bus' && (!p.asset || !p.order)) throw new Error('Para Bus son obligatorios el código y el número de OT');
   if (p.start === p.end) throw new Error('La hora de inicio y fin no pueden ser iguales');
   const requestId = String(p.requestId || '');
@@ -129,9 +157,11 @@ function saveJob_(b) {
   const duration = ((end < start ? end + 1440 : end) - start);
   if (!isFinite(duration) || duration <= 0 || duration > 1440) throw new Error('El rango de horas no es válido');
   const id = p.id || ('TR-' + Utilities.getUuid().slice(0, 8).toUpperCase());
-  const jobsSheet = sheet_(names.jobs);
+  let jobsSheet = sheet_(names.jobs);
   const progressSheet = sheet_(names.progress);
-  if (!jobsSheet.getRange(1, 21).getValue()) jobsSheet.getRange(1, 21).setValue('PATIO');
+  const located = p.id ? findJob_(p.id) : null;
+  if (located) jobsSheet = located.sheet;
+  const columns = ensureJobColumns_(jobsSheet, progressSheet);
   let total = duration;
 
   const sameText = (a, c) => String(a || '').trim().toUpperCase() === String(c || '').trim().toUpperCase();
@@ -158,11 +188,11 @@ function saveJob_(b) {
   if (overlaps) throw new Error('El horario se superpone con otro trabajo registrado por el mismo usuario');
 
   if (p.id) {
-    const idHeader = String(jobsSheet.getRange(1, 1).getValue());
-    const existing = objects_(jobsSheet).find(r => String(r[idHeader]) === String(p.id));
+    const existing = located && located.job;
     if (!existing) throw new Error('No se encontró el trabajo que se desea continuar');
     if (existing.ESTADO === 'Finalizado' || Number(existing.AVANCE_ACTUAL) >= 100) throw new Error('El trabajo ya está finalizado y no puede modificarse');
-    if (existing.USUARIO !== user.USUARIO) throw new Error('Solo el trabajador que registró el trabajo puede continuarlo');
+    const currentAssignee = String(existing.ASIGNADO_A || existing.USUARIO || '');
+    if (currentAssignee !== user.USUARIO && user.ROL === 'Técnico') throw new Error('Este trabajo está asignado a otro técnico');
     if (Number(p.progress) <= Number(existing.AVANCE_ACTUAL || 0)) throw new Error('El nuevo avance debe ser mayor al avance anterior');
     total = Number(existing.TIEMPO_TOTAL_MIN || 0) + duration;
     const row = existing._row;
@@ -175,6 +205,12 @@ function saveJob_(b) {
     jobsSheet.getRange(row, 19).setValue(total);
     jobsSheet.getRange(row, 20).setValue(formatMinutes_(total));
     if (p.patio) jobsSheet.getRange(row, 21).setValue(p.patio);
+    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, existing['ÁREA'], p.patio);
+    setCellByHeader_(jobsSheet, row, columns.jobs, 'SISTEMA', p.system);
+    setCellByHeader_(jobsSheet, row, columns.jobs, 'ASIGNADO_A', nextAssignee.USUARIO);
+    setCellByHeader_(jobsSheet, row, columns.jobs, 'ASIGNADO_NOMBRE', nextAssignee.NOMBRE_COMPLETO);
+    setCellByHeader_(jobsSheet, row, columns.jobs, 'ULTIMO_TECNICO', user.USUARIO);
+    setCellByHeader_(jobsSheet, row, columns.jobs, 'ULTIMA_ACTIVIDAD', new Date());
   } else {
     const jobHeaders = jobsSheet.getRange(1, 1, 1, jobsSheet.getLastColumn()).getValues()[0];
     const duplicateJob = objects_(jobsSheet).some(r => dateKey(r[jobHeaders[1]]) === dayKey &&
@@ -182,10 +218,23 @@ function saveJob_(b) {
       sameText(r[jobHeaders[6]], p.asset) && sameText(r[jobHeaders[8]], p.order) &&
       sameText(r[jobHeaders[9]], p.description) && sameText(r[jobHeaders[10]], p.start) && sameText(r[jobHeaders[11]], p.end));
     if (duplicateJob) throw new Error('Ya existe un trabajo con los mismos datos, horario y usuario');
-    jobsSheet.appendRow([id, new Date(), user.USUARIO, user.NOMBRE_COMPLETO, user['ÁREA'], p.place, p.asset, p.hasOrder ? 'Sí' : 'No', p.order || '', p.description, p.start, p.end, Number(p.progress), Number(p.progress) === 100 ? 'Finalizado' : 'En progreso', p.materials || 'No', p.notes || '', '', new Date(), duration, formatMinutes_(duration), p.patio || '']);
+    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, user['ÁREA'], p.patio);
+    const newRow = [id, new Date(), user.USUARIO, user.NOMBRE_COMPLETO, user['ÁREA'], p.place, p.asset, p.hasOrder ? 'Sí' : 'No', p.order || '', p.description, p.start, p.end, Number(p.progress), Number(p.progress) === 100 ? 'Finalizado' : 'En progreso', p.materials || 'No', p.notes || '', '', new Date(), duration, formatMinutes_(duration), p.patio || ''];
+    while (newRow.length < jobsSheet.getLastColumn()) newRow.push('');
+    newRow[columns.jobs.SISTEMA - 1] = p.system;
+    newRow[columns.jobs.ASIGNADO_A - 1] = nextAssignee.USUARIO;
+    newRow[columns.jobs.ASIGNADO_NOMBRE - 1] = nextAssignee.NOMBRE_COMPLETO;
+    newRow[columns.jobs.ULTIMO_TECNICO - 1] = user.USUARIO;
+    newRow[columns.jobs.ULTIMA_ACTIVIDAD - 1] = new Date();
+    jobsSheet.appendRow(newRow);
   }
 
-  progressSheet.appendRow(['AV-' + Utilities.getUuid().slice(0, 8).toUpperCase(), id, new Date(p.date || new Date()), user.USUARIO, Number(p.progress), p.description, p.start, p.end, p.materials || 'No', p.notes || '', Number(p.progress) === 100 ? 'Sí' : 'No', new Date(), duration, formatMinutes_(duration)]);
+  const progressRow = ['AV-' + Utilities.getUuid().slice(0, 8).toUpperCase(), id, new Date(p.date || new Date()), user.USUARIO, Number(p.progress), p.description, p.start, p.end, p.materials || 'No', p.notes || '', Number(p.progress) === 100 ? 'Sí' : 'No', new Date(), duration, formatMinutes_(duration)];
+  while (progressRow.length < progressSheet.getLastColumn()) progressRow.push('');
+  progressRow[columns.progress.SISTEMA - 1] = p.system;
+  progressRow[columns.progress.TECNICO_NOMBRE - 1] = user.NOMBRE_COMPLETO;
+  progressRow[columns.progress.ASIGNADO_A - 1] = Number(p.progress) === 100 ? user.USUARIO : String(p.assignTo || user.USUARIO);
+  progressSheet.appendRow(progressRow);
   const result = { id, duration, durationText: formatMinutes_(duration), totalMinutes: total, totalText: formatMinutes_(total), completed: Number(p.progress) === 100 };
   if (requestId) cache.put('job-request:' + requestId, JSON.stringify(result), 21600);
   return result;
@@ -254,15 +303,27 @@ function ensureCatalogSheets_() {
   if (buses.getLastRow() === 0) buses.appendRow(['CODIGO', 'ACTIVO', 'CREADO_EN', 'CREADO_POR']);
   const initialBuses = [].concat(INITIAL_BA.map(x => 'BA-' + x), INITIAL_BS.map(x => 'BS-' + x), INITIAL_BAR.map(x => 'BAR-' + x));
   if (buses.getLastRow() === 1) buses.getRange(2, 1, initialBuses.length, 4).setValues(initialBuses.map(x => [x, 'Sí', new Date(), SUPERADMIN_USER]));
-  return { patios, buses };
+
+  let systems = book.getSheetByName('SISTEMAS_APP');
+  if (!systems) systems = book.insertSheet('SISTEMAS_APP');
+  if (systems.getLastRow() === 0) systems.appendRow(['SISTEMA', 'AREA', 'ACTIVO', 'CREADO_EN', 'CREADO_POR']);
+  if (systems.getLastRow() === 1) systems.getRange(2, 1, INITIAL_SYSTEMS.length, 5).setValues(INITIAL_SYSTEMS.map(x => [x[0], x[1], 'Sí', new Date(), SUPERADMIN_USER]));
+  return { patios, buses, systems };
 }
 
 function getCatalogs_(b) {
-  auth_(b.token);
+  const user = auth_(b.token);
   const c = ensureCatalogSheets_();
   const patios = objects_(c.patios).filter(x => x.ACTIVO === 'Sí').map(x => String(x.NOMBRE)).sort();
   const buses = objects_(c.buses).filter(x => x.ACTIVO === 'Sí').map(x => String(x.CODIGO)).sort();
-  return { patios, buses };
+  const allSystems = objects_(c.systems).map(x => ({ name: String(x.SISTEMA), area: String(x.AREA), active: x.ACTIVO === 'Sí' }));
+  const area = normalizeArea_(user['ÁREA']);
+  const unrestricted = ['Administrador', 'Jefe'].includes(user.ROL);
+  const systems = allSystems.filter(x => x.active && (unrestricted || normalizeArea_(x.area) === 'TODOS' || normalizeArea_(x.area).split('/').map(v => v.trim()).includes(area))).map(x => x.name).sort();
+  const staff = objects_(sheet_('USUARIOS')).filter(x => x.ACTIVO === 'Sí' && x.ROL === 'Técnico' && (unrestricted || normalizeArea_(x['ÁREA']) === area)).map(x => ({
+    username: String(x.USUARIO), name: String(x.NOMBRE_COMPLETO), area: String(x['ÁREA']), location: String(x['UBICACIÓN_BASE'] || ''), shift: String(x.TURNO || '')
+  }));
+  return { patios, buses, systems, systemCatalog: allSystems, staff };
 }
 
 function addCatalog_(b) {
@@ -282,9 +343,30 @@ function addCatalog_(b) {
     } else if (type === 'patio') {
       if (objects_(c.patios).some(x => String(x.NOMBRE).toUpperCase() === value)) throw new Error('El patio ya existe');
       c.patios.appendRow([value, 'Sí', new Date(), actor.USUARIO]);
+    } else if (type === 'system') {
+      const area = String(b.area || '').trim().toUpperCase();
+      if (!area) throw new Error('Selecciona el área');
+      if (objects_(c.systems).some(x => normalizeArea_(x.SISTEMA) === normalizeArea_(value) && normalizeArea_(x.AREA) === normalizeArea_(area))) throw new Error('El sistema ya existe para esa área');
+      c.systems.appendRow([value, area, 'Sí', new Date(), actor.USUARIO]);
     } else throw new Error('Tipo de catálogo no válido');
     return true;
   } finally { lock.releaseLock(); }
+}
+
+function updateCatalog_(b) {
+  const actor = auth_(b.token);
+  requireSuperAdmin_(actor);
+  if (String(b.type) !== 'system') throw new Error('Catálogo no válido');
+  const oldName = String(b.oldName || '').trim();
+  const oldArea = String(b.oldArea || '').trim();
+  const name = String(b.value || '').trim().toUpperCase();
+  const area = String(b.area || '').trim().toUpperCase();
+  if (!name || !area) throw new Error('Completa sistema y área');
+  const sheet = ensureCatalogSheets_().systems;
+  const target = objects_(sheet).find(x => normalizeArea_(x.SISTEMA) === normalizeArea_(oldName) && normalizeArea_(x.AREA) === normalizeArea_(oldArea));
+  if (!target) throw new Error('Sistema no encontrado');
+  sheet.getRange(target._row, 1, 1, 3).setValues([[name, area, b.active === false ? 'No' : 'Sí']]);
+  return true;
 }
 
 function requireSuperAdmin_(user) {
@@ -313,13 +395,70 @@ function ensureMonth_(date) {
   const key = Utilities.formatDate(date, tz, 'yyyy_MM');
   const jobs = 'TRABAJOS_' + key, progress = 'AVANCES_' + key;
   const book = SpreadsheetApp.openById(BOOK_ID);
+  ensureJobColumns_(sheet_('TRABAJOS'), sheet_('AVANCES'));
   if (!book.getSheetByName(jobs)) book.getSheetByName('TRABAJOS').copyTo(book).setName(jobs);
   if (!book.getSheetByName(progress)) book.getSheetByName('AVANCES').copyTo(book).setName(progress);
   if (!book.getSheetByName(jobs).getRange(1, 21).getValue()) book.getSheetByName(jobs).getRange(1, 21).setValue('PATIO');
+  ensureJobColumns_(book.getSheetByName(jobs), book.getSheetByName(progress));
   const index = book.getSheetByName('MESES');
   const exists = index.getRange(2, 1, Math.max(index.getLastRow() - 1, 1), 1).getDisplayValues().flat().includes(key.replace('_', '-'));
   if (!exists) index.appendRow([key.replace('_', '-'), jobs, progress, 'Activo', new Date(), '']);
   return { jobs, progress };
+}
+
+function ensureJobColumns_(jobsSheet, progressSheet) {
+  return {
+    jobs: ensureHeaders_(jobsSheet, ['PATIO', 'SISTEMA', 'ASIGNADO_A', 'ASIGNADO_NOMBRE', 'ULTIMO_TECNICO', 'ULTIMA_ACTIVIDAD']),
+    progress: ensureHeaders_(progressSheet, ['SISTEMA', 'TECNICO_NOMBRE', 'ASIGNADO_A'])
+  };
+}
+
+function findJob_(id) {
+  const sheets = SpreadsheetApp.openById(BOOK_ID).getSheets().filter(s => /^TRABAJOS_\d{4}_\d{2}$/.test(s.getName()));
+  for (const sheet of sheets) {
+    const idHeader = String(sheet.getRange(1, 1).getValue());
+    const job = objects_(sheet).find(r => String(r[idHeader]) === String(id));
+    if (job) return { sheet, job };
+  }
+  return null;
+}
+
+function ensureHeaders_(sheet, required) {
+  let headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0].map(String);
+  required.forEach(name => {
+    if (!headers.includes(name)) {
+      sheet.getRange(1, headers.length + 1).setValue(name);
+      headers.push(name);
+    }
+  });
+  const result = {};
+  headers.forEach((name, index) => result[name] = index + 1);
+  return result;
+}
+
+function setCellByHeader_(sheet, row, headers, name, value) {
+  sheet.getRange(row, headers[name]).setValue(value);
+}
+
+function validateAssignee_(username, area, patio) {
+  const target = findUser_(username);
+  if (!target || target.ACTIVO !== 'Sí' || target.ROL !== 'Técnico') throw new Error('El técnico asignado no está disponible');
+  if (normalizeArea_(target['ÁREA']) !== normalizeArea_(area)) throw new Error('El técnico asignado debe pertenecer a la misma área');
+  if (normalizeArea_(target['UBICACIÓN_BASE']) !== normalizeArea_(patio)) throw new Error('El técnico asignado debe pertenecer al mismo patio');
+  return target;
+}
+
+function validateSystem_(system, area) {
+  const rows = objects_(ensureCatalogSheets_().systems).filter(x => x.ACTIVO === 'Sí');
+  const normalizedArea = normalizeArea_(area);
+  const valid = rows.some(x => normalizeArea_(x.SISTEMA) === normalizeArea_(system) && (
+    normalizeArea_(x.AREA) === 'TODOS' || normalizeArea_(x.AREA).split('/').map(v => v.trim()).includes(normalizedArea)
+  ));
+  if (!valid) throw new Error('Selecciona un sistema válido para el área');
+}
+
+function normalizeArea_(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
 }
 
 function findUser_(username) {

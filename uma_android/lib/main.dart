@@ -771,7 +771,10 @@ class _HomePageState extends State<HomePage> {
   Map stats = {};
   bool busy = true;
   String period = 'Hoy';
-  List<String> patios = List.of(patioLocations), buses = List.of(busCodes);
+  List<String> patios = List.of(patioLocations),
+      buses = List.of(busCodes),
+      systems = [];
+  List<Map<String, dynamic>> staff = [], systemCatalog = [];
   bool get privileged => widget.profile['role'] != 'Técnico';
   bool get globalAdmin =>
       ['Administrador', 'Jefe'].contains(widget.profile['role']);
@@ -798,6 +801,15 @@ class _HomePageState extends State<HomePage> {
       if (c['ok'] == true) {
         patios = List<String>.from(c['data']['patios']);
         buses = List<String>.from(c['data']['buses']);
+        systems = List<String>.from(c['data']['systems'] ?? []);
+        staff = List<Map<String, dynamic>>.from(
+          (c['data']['staff'] ?? []).map((x) => Map<String, dynamic>.from(x)),
+        );
+        systemCatalog = List<Map<String, dynamic>>.from(
+          (c['data']['systemCatalog'] ?? []).map(
+            (x) => Map<String, dynamic>.from(x),
+          ),
+        );
       }
       final j = responses[1];
       if (j['ok'] == true) jobs = j['data'] ?? [];
@@ -869,6 +881,9 @@ class _HomePageState extends State<HomePage> {
                     token: widget.token,
                     patios: patios,
                     buses: buses,
+                    systems: systems,
+                    staff: staff,
+                    profile: widget.profile,
                   ),
                 ),
               ).then((_) => load()),
@@ -881,8 +896,14 @@ class _HomePageState extends State<HomePage> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) =>
-                    JobForm(token: widget.token, patios: patios, buses: buses),
+                builder: (_) => JobForm(
+                  token: widget.token,
+                  patios: patios,
+                  buses: buses,
+                  systems: systems,
+                  staff: staff,
+                  profile: widget.profile,
+                ),
               ),
             ).then((_) => load());
           } else
@@ -963,6 +984,23 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       const SizedBox(height: 24),
+      if (jobs.any((x) => x['ALERTA_ATRASO'] == true))
+        Card(
+          color: const Color(0xffFFF7ED),
+          child: ListTile(
+            leading: const Icon(
+              Icons.warning_amber_rounded,
+              color: Color(0xffC2410C),
+            ),
+            title: const Text(
+              'Trabajos atrasados',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(
+              '${jobs.where((x) => x['ALERTA_ATRASO'] == true).length} trabajo(s) llevan más de 2 días sin concluir.',
+            ),
+          ),
+        ),
       Text(
         privileged
             ? 'Trabajos pendientes del personal'
@@ -1039,14 +1077,17 @@ class _HomePageState extends State<HomePage> {
     final done =
         j['ESTADO'] == 'Finalizado' ||
         num.tryParse('${j['AVANCE_ACTUAL'] ?? 0}') == 100;
-    final own =
-        j['USUARIO']?.toString() == widget.profile['username']?.toString();
+    final assigned = (j['ASIGNADO_A']?.toString().isNotEmpty ?? false)
+        ? j['ASIGNADO_A'].toString()
+        : j['USUARIO']?.toString() ?? '';
+    final canContinue = assigned == widget.profile['username']?.toString();
+    final overdue = j['ALERTA_ATRASO'] == true;
     final patio = j['PATIO']?.toString() ?? '';
     return Card(
       color: Colors.white,
       margin: const EdgeInsets.symmetric(vertical: 7),
       child: ListTile(
-        onTap: done || !own
+        onTap: done || !canContinue
             ? null
             : () => Navigator.push(
                 context,
@@ -1056,21 +1097,28 @@ class _HomePageState extends State<HomePage> {
                     existing: Map<String, dynamic>.from(j),
                     patios: patios,
                     buses: buses,
+                    systems: systems,
+                    staff: staff,
+                    profile: widget.profile,
                   ),
                 ),
               ).then((_) => load()),
         title: Text(j['DESCRIPCIÓN']?.toString() ?? 'Trabajo'),
         subtitle: Text(
-          '${privileged ? '${j['NOMBRE_COMPLETO'] ?? j['USUARIO'] ?? ''} · ${j['ÁREA'] ?? ''}\n' : ''}${j['LUGAR'] ?? ''} · ${j['UBICACIÓN'] ?? ''}${patio.isEmpty ? '' : ' · $patio'}\nAvance: ${j['AVANCE_ACTUAL'] ?? 0}% · ${j['TIEMPO_TOTAL'] ?? ''}',
+          '${overdue ? '⚠ ATRASADO ${j['DIAS_ABIERTO']} días\n' : ''}${privileged ? '${j['NOMBRE_COMPLETO'] ?? j['USUARIO'] ?? ''} · ${j['ÁREA'] ?? ''}\n' : ''}Sistema: ${j['SISTEMA'] ?? 'Sin clasificar'}\n${j['LUGAR'] ?? ''} · ${j['UBICACIÓN'] ?? ''}${patio.isEmpty ? '' : ' · $patio'}\nResponsable actual: ${j['ASIGNADO_NOMBRE'] ?? assigned}\nAvance: ${j['AVANCE_ACTUAL'] ?? 0}% · ${j['TIEMPO_TOTAL'] ?? ''}',
         ),
-        isThreeLine: true,
+        isThreeLine: false,
         trailing: Icon(
           done
               ? Icons.lock
-              : own
+              : canContinue
               ? Icons.play_circle_fill
               : Icons.visibility,
-          color: done ? const Color(0xff15803D) : ssumaBlue,
+          color: overdue
+              ? const Color(0xffC2410C)
+              : done
+              ? const Color(0xff15803D)
+              : ssumaBlue,
         ),
       ),
     );
@@ -1129,11 +1177,14 @@ class _HomePageState extends State<HomePage> {
           onPressed: () => Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => CatalogAdminPage(token: widget.token),
+              builder: (_) => CatalogAdminPage(
+                token: widget.token,
+                initialSystems: systemCatalog,
+              ),
             ),
           ).then((_) => load()),
           icon: const Icon(Icons.directions_bus),
-          label: const Text('Gestionar patios y buses'),
+          label: const Text('Gestionar patios, buses y sistemas'),
         ),
       ],
     ],
@@ -1195,13 +1246,18 @@ class _HomePageState extends State<HomePage> {
 class JobForm extends StatefulWidget {
   final String token;
   final Map<String, dynamic>? existing;
-  final List<String> patios, buses;
+  final Map<String, dynamic> profile;
+  final List<String> patios, buses, systems;
+  final List<Map<String, dynamic>> staff;
   const JobForm({
     super.key,
     required this.token,
     this.existing,
     required this.patios,
     required this.buses,
+    required this.systems,
+    required this.staff,
+    required this.profile,
   });
   @override
   State<JobForm> createState() => _JobFormState();
@@ -1214,7 +1270,12 @@ class _JobFormState extends State<JobForm> {
       order = TextEditingController(),
       notes = TextEditingController();
   final requestId = 'JOB-${DateTime.now().microsecondsSinceEpoch}';
-  String place = 'Patio', progress = '50', start = '08:00', end = '16:00';
+  String place = 'Patio',
+      progress = '50',
+      start = '08:00',
+      end = '16:00',
+      system = '',
+      assignTo = '';
   bool usedParts = false, busy = false;
   int previousProgress = 0;
 
@@ -1235,6 +1296,15 @@ class _JobFormState extends State<JobForm> {
     '100',
   ].where((x) => int.parse(x) > previousProgress).toList();
 
+  List<Map<String, dynamic>> get eligibleStaff {
+    final selectedPatio = patio.text.trim().toUpperCase();
+    return widget.staff
+        .where(
+          (x) => x['location'].toString().trim().toUpperCase() == selectedPatio,
+        )
+        .toList();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1247,6 +1317,14 @@ class _JobFormState extends State<JobForm> {
       order.text = job['NRO_OT']?.toString() ?? '';
       previousProgress = int.tryParse('${job['AVANCE_ACTUAL'] ?? 0}') ?? 0;
       progress = progressOptions.isNotEmpty ? progressOptions.first : '100';
+      system = job['SISTEMA']?.toString() ?? '';
+      assignTo =
+          job['ASIGNADO_A']?.toString() ??
+          widget.profile['username']?.toString() ??
+          '';
+    } else {
+      system = widget.systems.isNotEmpty ? widget.systems.first : '';
+      assignTo = widget.profile['username']?.toString() ?? '';
     }
   }
 
@@ -1300,6 +1378,14 @@ class _JobFormState extends State<JobForm> {
       message('Selecciona el patio');
       return;
     }
+    if (system.isEmpty || !widget.systems.contains(system)) {
+      message('Selecciona el sistema al que pertenece el trabajo');
+      return;
+    }
+    if (progress != '100' && assignTo.isEmpty) {
+      message('Selecciona quién continuará el trabajo');
+      return;
+    }
     if (place == 'Bus' && asset.text.trim().isEmpty) {
       message('Selecciona el código del bus');
       return;
@@ -1342,6 +1428,7 @@ class _JobFormState extends State<JobForm> {
           'date': DateTime.now().toIso8601String(),
           'place': place,
           'patio': patio.text.trim(),
+          'system': system,
           'asset': isBus ? asset.text.trim() : patio.text.trim(),
           'hasOrder': isBus,
           'order': isBus ? order.text.trim() : '',
@@ -1349,6 +1436,7 @@ class _JobFormState extends State<JobForm> {
           'start': start,
           'end': end,
           'progress': int.parse(progress),
+          'assignTo': progress == '100' ? widget.profile['username'] : assignTo,
           'materials': usedParts ? 'Sí' : 'No',
           'notes': notes.text.trim(),
         },
@@ -1425,7 +1513,36 @@ class _JobFormState extends State<JobForm> {
           items: widget.patios
               .map((x) => DropdownMenuItem(value: x, child: Text(x)))
               .toList(),
-          onChanged: (v) => setState(() => patio.text = v ?? ''),
+          onChanged: (v) => setState(() {
+            patio.text = v ?? '';
+            final candidates = widget.staff
+                .where(
+                  (x) =>
+                      x['location'].toString().trim().toUpperCase() ==
+                      patio.text.trim().toUpperCase(),
+                )
+                .toList();
+            if (!candidates.any((x) => x['username'] == assignTo)) {
+              assignTo = candidates.isNotEmpty
+                  ? candidates.first['username'].toString()
+                  : '';
+            }
+          }),
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: widget.systems.contains(system) ? system : null,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Sistema del trabajo',
+            prefixIcon: Icon(Icons.precision_manufacturing_outlined),
+          ),
+          items: widget.systems
+              .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+              .toList(),
+          onChanged: continuing && system.isNotEmpty
+              ? null
+              : (v) => setState(() => system = v ?? ''),
         ),
         if (place == 'Bus') ...[
           const SizedBox(height: 12),
@@ -1488,8 +1605,37 @@ class _JobFormState extends State<JobForm> {
           items: progressOptions
               .map((x) => DropdownMenuItem(value: x, child: Text('$x%')))
               .toList(),
-          onChanged: (v) => progress = v!,
+          onChanged: (v) => setState(() => progress = v!),
         ),
+        if (progress != '100') ...[
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: eligibleStaff.any((x) => x['username'] == assignTo)
+                ? assignTo
+                : null,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Responsable que continuará',
+              prefixIcon: Icon(Icons.forward_to_inbox_outlined),
+            ),
+            items: eligibleStaff
+                .map(
+                  (x) => DropdownMenuItem<String>(
+                    value: x['username'].toString(),
+                    child: Text('${x['name']} · ${x['shift']}'),
+                  ),
+                )
+                .toList(),
+            onChanged: (v) => setState(() => assignTo = v ?? ''),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 7, 4, 0),
+            child: Text(
+              'El siguiente técnico verá el trabajo pendiente y continuará acumulando tiempo.',
+              style: TextStyle(color: ssumaMuted, fontSize: 12),
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         SwitchListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1858,17 +2004,33 @@ class _EditUserPageState extends State<EditUserPage> {
 
 class CatalogAdminPage extends StatefulWidget {
   final String token;
-  const CatalogAdminPage({super.key, required this.token});
+  final List<Map<String, dynamic>> initialSystems;
+  const CatalogAdminPage({
+    super.key,
+    required this.token,
+    required this.initialSystems,
+  });
   @override
   State<CatalogAdminPage> createState() => _CatalogAdminPageState();
 }
 
 class _CatalogAdminPageState extends State<CatalogAdminPage> {
   List patios = [], buses = [];
+  List<Map<String, dynamic>> systems = [];
+  static const areas = [
+    'TIC',
+    'MECANICA',
+    'ELECTROMECANICA',
+    'RESTAURACION',
+    'MAESTRANZA',
+    'RESTAURACION / MECANICA',
+    'TODOS',
+  ];
   bool busy = true;
   @override
   void initState() {
     super.initState();
+    systems = List<Map<String, dynamic>>.from(widget.initialSystems);
     load();
   }
 
@@ -1879,12 +2041,21 @@ class _CatalogAdminPageState extends State<CatalogAdminPage> {
         if (r['ok'] == true) {
           patios = r['data']['patios'];
           buses = r['data']['buses'];
+          systems = List<Map<String, dynamic>>.from(
+            (r['data']['systemCatalog'] ?? []).map(
+              (x) => Map<String, dynamic>.from(x),
+            ),
+          );
         }
         busy = false;
       });
   }
 
   Future<void> add(String type) async {
+    if (type == 'system') {
+      await editSystem(null);
+      return;
+    }
     final controller = TextEditingController();
     final value = await showDialog<String>(
       context: context,
@@ -1925,9 +2096,92 @@ class _CatalogAdminPageState extends State<CatalogAdminPage> {
     if (r['ok'] == true) load();
   }
 
+  Future<void> editSystem(Map<String, dynamic>? item) async {
+    final controller = TextEditingController(
+      text: item?['name']?.toString() ?? '',
+    );
+    String area = item?['area']?.toString() ?? 'TIC';
+    if (!areas.contains(area)) area = 'TIC';
+    bool active = item?['active'] != false;
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (c) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(item == null ? 'Agregar sistema' : 'Editar sistema'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Nombre del sistema',
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: area,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Área'),
+                items: areas
+                    .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+                    .toList(),
+                onChanged: (v) => setDialogState(() => area = v ?? area),
+              ),
+              if (item != null)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Sistema activo'),
+                  value: active,
+                  onChanged: (v) => setDialogState(() => active = v),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(c),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(c, {
+                'value': controller.text,
+                'area': area,
+                'active': active,
+              }),
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || result['value'].toString().trim().isEmpty) return;
+    final payload = <String, dynamic>{
+      'action': item == null ? 'addCatalog' : 'updateCatalog',
+      'token': widget.token,
+      'type': 'system',
+      'value': result['value'],
+      'area': result['area'],
+      'active': result['active'],
+      if (item != null) 'oldName': item['name'],
+      if (item != null) 'oldArea': item['area'],
+    };
+    final response = await api(payload);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          response['ok'] == true
+              ? 'Sistema guardado'
+              : response['error'].toString(),
+        ),
+      ),
+    );
+    if (response['ok'] == true) load();
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Patios y buses')),
+    appBar: AppBar(title: const Text('Catálogos institucionales')),
     body: busy
         ? const Center(child: CircularProgressIndicator())
         : ListView(
@@ -1955,9 +2209,49 @@ class _CatalogAdminPageState extends State<CatalogAdminPage> {
                   ),
                 ),
               ),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.precision_manufacturing),
+                  title: Text(
+                    '${systems.where((x) => x['active'] == true).length} sistemas activos',
+                  ),
+                  subtitle: const Text('Clasificados por área'),
+                  trailing: IconButton(
+                    onPressed: () => add('system'),
+                    icon: const Icon(Icons.add),
+                  ),
+                ),
+              ),
               const SizedBox(height: 16),
               const Text(
-                'Los nuevos patios y buses aparecerán automáticamente en todos los celulares.',
+                'Sistemas por área',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              ...systems.map(
+                (item) => Card(
+                  child: ListTile(
+                    leading: Icon(
+                      item['active'] == true
+                          ? Icons.check_circle_outline
+                          : Icons.block,
+                      color: item['active'] == true
+                          ? const Color(0xff15803D)
+                          : ssumaMuted,
+                    ),
+                    title: Text(item['name']?.toString() ?? ''),
+                    subtitle: Text(
+                      '${item['area']}${item['active'] == true ? '' : ' · Inactivo'}',
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.edit),
+                      onPressed: () => editSystem(item),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Los cambios aparecerán automáticamente en todos los celulares.',
                 style: TextStyle(color: ssumaMuted),
               ),
             ],
