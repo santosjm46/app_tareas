@@ -1297,12 +1297,9 @@ class _JobFormState extends State<JobForm> {
   ].where((x) => int.parse(x) > previousProgress).toList();
 
   List<Map<String, dynamic>> get eligibleStaff {
-    final selectedPatio = patio.text.trim().toUpperCase();
-    return widget.staff
-        .where(
-          (x) => x['location'].toString().trim().toUpperCase() == selectedPatio,
-        )
-        .toList();
+    final result = List<Map<String, dynamic>>.from(widget.staff);
+    result.sort((a, b) => a['name'].toString().compareTo(b['name'].toString()));
+    return result;
   }
 
   @override
@@ -1457,6 +1454,68 @@ class _JobFormState extends State<JobForm> {
     }
   }
 
+  Future<void> transferWithoutProgress() async {
+    if (!continuing || busy) return;
+    final currentAssignee =
+        widget.existing!['ASIGNADO_A']?.toString() ??
+        widget.existing!['USUARIO']?.toString() ??
+        '';
+    if (assignTo.isEmpty ||
+        !eligibleStaff.any((x) => x['username'].toString() == assignTo)) {
+      message('Selecciona quién continuará el trabajo');
+      return;
+    }
+    if (assignTo == currentAssignee) {
+      message('Selecciona otro responsable de la misma área');
+      return;
+    }
+    final target = eligibleStaff.firstWhere(
+      (x) => x['username'].toString() == assignTo,
+    );
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Transferir trabajo'),
+        content: Text(
+          'Se asignará a ${target['name']} conservando el avance en $previousProgress% y sin agregar tiempo. ¿Continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('CANCELAR'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('TRANSFERIR'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => busy = true);
+    try {
+      final r = await api({
+        'action': 'reassignJob',
+        'token': widget.token,
+        'id': existingId,
+        'assignTo': assignTo,
+      });
+      if (!mounted) return;
+      if (r['ok'] == true) {
+        message('Trabajo transferido a ${target['name']}');
+        Navigator.pop(context);
+      } else {
+        message(r['error']?.toString() ?? 'No se pudo transferir');
+        setState(() => busy = false);
+      }
+    } catch (_) {
+      if (mounted) {
+        message('No se pudo conectar con el servidor');
+        setState(() => busy = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -1515,16 +1574,9 @@ class _JobFormState extends State<JobForm> {
               .toList(),
           onChanged: (v) => setState(() {
             patio.text = v ?? '';
-            final candidates = widget.staff
-                .where(
-                  (x) =>
-                      x['location'].toString().trim().toUpperCase() ==
-                      patio.text.trim().toUpperCase(),
-                )
-                .toList();
-            if (!candidates.any((x) => x['username'] == assignTo)) {
-              assignTo = candidates.isNotEmpty
-                  ? candidates.first['username'].toString()
+            if (!widget.staff.any((x) => x['username'] == assignTo)) {
+              assignTo = widget.staff.isNotEmpty
+                  ? widget.staff.first['username'].toString()
                   : '';
             }
           }),
@@ -1635,6 +1687,16 @@ class _JobFormState extends State<JobForm> {
               style: TextStyle(color: ssumaMuted, fontSize: 12),
             ),
           ),
+          if (continuing) ...[
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: busy ? null : transferWithoutProgress,
+              icon: const Icon(Icons.swap_horiz),
+              label: Text(
+                'Transferir sin avance (conservar $previousProgress%)',
+              ),
+            ),
+          ],
         ],
         const SizedBox(height: 12),
         SwitchListTile(

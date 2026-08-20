@@ -22,7 +22,7 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.payload) {
     return handleRequest_(JSON.parse(e.parameter.payload));
   }
-  return json_({ ok: true, service: 'SSUMA Trabajos', version: 4 });
+  return json_({ ok: true, service: 'SSUMA Trabajos', version: 5 });
 }
 
 function doPost(e) {
@@ -38,6 +38,7 @@ function handleRequest_(body) {
       resetPassword: () => resetPassword_(body),
       listJobs: () => listJobs_(body),
       saveJob: () => saveJob_(body),
+      reassignJob: () => reassignJob_(body),
       createOperationalUser: () => createOperationalUser_(body),
       listUsers: () => listUsers_(body),
       updateUser: () => updateUser_(body),
@@ -205,7 +206,7 @@ function saveJob_(b) {
     jobsSheet.getRange(row, 19).setValue(total);
     jobsSheet.getRange(row, 20).setValue(formatMinutes_(total));
     if (p.patio) jobsSheet.getRange(row, 21).setValue(p.patio);
-    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, existing['ÁREA'], p.patio);
+    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, existing['ÁREA']);
     setCellByHeader_(jobsSheet, row, columns.jobs, 'SISTEMA', p.system);
     setCellByHeader_(jobsSheet, row, columns.jobs, 'ASIGNADO_A', nextAssignee.USUARIO);
     setCellByHeader_(jobsSheet, row, columns.jobs, 'ASIGNADO_NOMBRE', nextAssignee.NOMBRE_COMPLETO);
@@ -218,7 +219,7 @@ function saveJob_(b) {
       sameText(r[jobHeaders[6]], p.asset) && sameText(r[jobHeaders[8]], p.order) &&
       sameText(r[jobHeaders[9]], p.description) && sameText(r[jobHeaders[10]], p.start) && sameText(r[jobHeaders[11]], p.end));
     if (duplicateJob) throw new Error('Ya existe un trabajo con los mismos datos, horario y usuario');
-    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, user['ÁREA'], p.patio);
+    const nextAssignee = Number(p.progress) === 100 ? user : validateAssignee_(p.assignTo || user.USUARIO, user['ÁREA']);
     const newRow = [id, new Date(), user.USUARIO, user.NOMBRE_COMPLETO, user['ÁREA'], p.place, p.asset, p.hasOrder ? 'Sí' : 'No', p.order || '', p.description, p.start, p.end, Number(p.progress), Number(p.progress) === 100 ? 'Finalizado' : 'En progreso', p.materials || 'No', p.notes || '', '', new Date(), duration, formatMinutes_(duration), p.patio || ''];
     while (newRow.length < jobsSheet.getLastColumn()) newRow.push('');
     newRow[columns.jobs.SISTEMA - 1] = p.system;
@@ -238,6 +239,35 @@ function saveJob_(b) {
   const result = { id, duration, durationText: formatMinutes_(duration), totalMinutes: total, totalText: formatMinutes_(total), completed: Number(p.progress) === 100 };
   if (requestId) cache.put('job-request:' + requestId, JSON.stringify(result), 21600);
   return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function reassignJob_(b) {
+  const user = auth_(b.token);
+  const id = String(b.id || '').trim();
+  const assignTo = String(b.assignTo || '').trim();
+  if (!id || !assignTo) throw new Error('Selecciona el trabajo y el nuevo responsable');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const located = findJob_(id);
+    if (!located) throw new Error('Trabajo no encontrado');
+    const job = located.job;
+    if (job.ESTADO === 'Finalizado' || Number(job.AVANCE_ACTUAL || 0) >= 100) throw new Error('El trabajo ya está finalizado');
+    const currentAssignee = String(job.ASIGNADO_A || job.USUARIO || '');
+    if (currentAssignee !== user.USUARIO && user.ROL === 'Técnico') throw new Error('Este trabajo está asignado a otro técnico');
+    if (assignTo === currentAssignee) throw new Error('Selecciona otro responsable');
+    const target = validateAssignee_(assignTo, job['ÁREA']);
+    const columns = ensureHeaders_(located.sheet, ['PATIO', 'SISTEMA', 'ASIGNADO_A', 'ASIGNADO_NOMBRE', 'ULTIMO_TECNICO', 'ULTIMA_ACTIVIDAD']);
+    setCellByHeader_(located.sheet, job._row, columns, 'ASIGNADO_A', target.USUARIO);
+    setCellByHeader_(located.sheet, job._row, columns, 'ASIGNADO_NOMBRE', target.NOMBRE_COMPLETO);
+    setCellByHeader_(located.sheet, job._row, columns, 'ULTIMO_TECNICO', user.USUARIO);
+    setCellByHeader_(located.sheet, job._row, columns, 'ULTIMA_ACTIVIDAD', new Date());
+    const note = 'Transferido sin avance de ' + user.USUARIO + ' a ' + target.USUARIO + ' (' + Number(job.AVANCE_ACTUAL || 0) + '%)';
+    located.sheet.getRange(job._row, 16).setValue([job.OBSERVACIONES || '', note].filter(Boolean).join(' | '));
+    return { id, progress: Number(job.AVANCE_ACTUAL || 0), assignedTo: target.USUARIO, assignedName: target.NOMBRE_COMPLETO };
   } finally {
     lock.releaseLock();
   }
@@ -440,11 +470,10 @@ function setCellByHeader_(sheet, row, headers, name, value) {
   sheet.getRange(row, headers[name]).setValue(value);
 }
 
-function validateAssignee_(username, area, patio) {
+function validateAssignee_(username, area) {
   const target = findUser_(username);
   if (!target || target.ACTIVO !== 'Sí' || target.ROL !== 'Técnico') throw new Error('El técnico asignado no está disponible');
   if (normalizeArea_(target['ÁREA']) !== normalizeArea_(area)) throw new Error('El técnico asignado debe pertenecer a la misma área');
-  if (normalizeArea_(target['UBICACIÓN_BASE']) !== normalizeArea_(patio)) throw new Error('El técnico asignado debe pertenecer al mismo patio');
   return target;
 }
 
